@@ -273,7 +273,7 @@ func (s *Store) IsSongActive(ctx context.Context, songID string) (bool, error) {
 // EnqueueJob adds or resets one pipeline stage.
 func (s *Store) EnqueueJob(ctx context.Context, songID, stage string) error {
 	_, err := s.W.ExecContext(ctx, `INSERT INTO jobs(song_id,stage,status,attempts,error,updated_at) VALUES(?,?,'pending',0,'',?)
-	  ON CONFLICT(song_id,stage) DO UPDATE SET status='pending',attempts=0,error='',updated_at=excluded.updated_at`,
+	  ON CONFLICT(song_id,stage) DO UPDATE SET status='pending',attempts=0,error='',run_after=0,blocked=0,updated_at=excluded.updated_at`,
 		songID, stage, time.Now().UnixMilli())
 	return err
 }
@@ -299,6 +299,7 @@ func (s *Store) JobStatus(ctx context.Context, songID, stage string) (string, er
 type Job struct {
 	SongID, Stage string
 	Attempts      int
+	Blocked       int // times this stage was blocked and put off
 }
 
 // ClaimJob atomically takes the next job from the given stages. It returns nil
@@ -323,12 +324,13 @@ func (s *Store) ClaimJob(ctx context.Context, stages []string) (*Job, error) {
 	defer tx.Rollback()
 	var j Job
 	err = tx.QueryRowContext(ctx, fmt.Sprintf(`
-	  SELECT j.song_id,j.stage,j.attempts FROM jobs j
+	  SELECT j.song_id,j.stage,j.attempts,j.blocked FROM jobs j
 	  LEFT JOIN (SELECT song_id,MIN(CASE status WHEN 'playing' THEN -1e18 ELSE position END) p
 	             FROM queue_items WHERE status IN('waiting','playing') GROUP BY song_id) q ON q.song_id=j.song_id
-	  WHERE j.status='pending' AND j.stage IN(%s)
-	  ORDER BY CASE WHEN q.p IS NULL THEN 2 WHEN j.stage='align' THEN 1 ELSE 0 END, q.p, j.updated_at LIMIT 1`, ph), args...).
-		Scan(&j.SongID, &j.Stage, &j.Attempts)
+	  WHERE j.status='pending' AND j.run_after<=? AND j.stage IN(%s)
+	  ORDER BY CASE WHEN q.p IS NULL THEN 2 WHEN j.stage='align' THEN 1 ELSE 0 END, q.p, j.updated_at LIMIT 1`, ph),
+		append([]any{time.Now().UnixMilli()}, args...)...).
+		Scan(&j.SongID, &j.Stage, &j.Attempts, &j.Blocked)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -347,6 +349,14 @@ func (s *Store) ClaimJob(ctx context.Context, stages []string) (*Job, error) {
 func (s *Store) FinishJob(ctx context.Context, songID, stage, status, errText string) error {
 	_, err := s.W.ExecContext(ctx, `UPDATE jobs SET status=?,error=?,updated_at=? WHERE song_id=? AND stage=?`,
 		status, errText, time.Now().UnixMilli(), songID, stage)
+	return err
+}
+
+// RetryJobLater puts a stage off until a set time. It doesn't use up the
+// stage's normal retries.
+func (s *Store) RetryJobLater(ctx context.Context, songID, stage, errText string, at time.Time) error {
+	_, err := s.W.ExecContext(ctx, `UPDATE jobs SET status='pending',attempts=0,blocked=blocked+1,run_after=?,error=?,updated_at=? WHERE song_id=? AND stage=?`,
+		at.UnixMilli(), errText, time.Now().UnixMilli(), songID, stage)
 	return err
 }
 

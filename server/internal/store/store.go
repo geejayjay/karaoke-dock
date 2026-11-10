@@ -114,7 +114,7 @@ CREATE TABLE admin_sessions(
 ) WITHOUT ROWID;
 `
 
-const schemaVersion = 6
+const schemaVersion = 7
 
 // searchSchema adds typo-friendly search over names and lyrics.
 const searchSchema = `
@@ -214,6 +214,12 @@ func migrate(db *sql.DB) error {
 	}
 	if v < 6 {
 		if _, err := tx.Exec(`ALTER TABLE artists ADD COLUMN cover_key TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if v < 7 { // a blocked download waits before trying again
+		if _, err := tx.Exec(`ALTER TABLE jobs ADD COLUMN run_after INTEGER NOT NULL DEFAULT 0;
+			ALTER TABLE jobs ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0`); err != nil {
 			return err
 		}
 	}

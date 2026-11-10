@@ -100,6 +100,9 @@ func describe(s *store.Song, now *activity) SongStatus {
 	default:
 		st.Overall = store.FilterWorking
 		st.Step = "Waiting"
+		if now == nil && s.State == StateQueued && s.Error != "" {
+			st.Step = s.Error // waiting to try a blocked download again
+		}
 		if now != nil {
 			st.Step = stepNames[stage]
 			if now.percent > 0 {

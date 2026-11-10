@@ -235,6 +235,10 @@ func (m *Manager) execute(ctx context.Context, j *store.Job) {
 		return
 	}
 	log.Warn("stage failed", "err", err)
+	if j.Stage == StageDownload && tools.IsBlocked(err) && j.Blocked < len(blockedWaits) {
+		m.retryBlocked(ctx, j, err)
+		return
+	}
 	retry := j.Attempts < 2
 	if sidecar.IsGPUOOM(err) {
 		if j.Attempts == 2 {
@@ -249,6 +253,23 @@ func (m *Manager) execute(ctx context.Context, j *store.Job) {
 	}
 	_ = m.DB.FinishJob(ctx, j.SongID, j.Stage, "failed", err.Error())
 	m.handleFailure(ctx, j, err)
+	m.changed(j.SongID)
+}
+
+// blockedWaits is how long to wait before each new try, after YouTube blocks a
+// download. Blocks usually clear within hours.
+var blockedWaits = []time.Duration{15 * time.Minute, time.Hour, 4 * time.Hour}
+
+// retryBlocked puts a blocked download off, so it tries again by itself.
+func (m *Manager) retryBlocked(ctx context.Context, j *store.Job, cause error) {
+	at := time.Now().Add(blockedWaits[j.Blocked])
+	msg := "YouTube blocked this download. Trying again at " + at.Format("3:04 PM") + "."
+	if err := m.DB.RetryJobLater(ctx, j.SongID, j.Stage, cause.Error(), at); err != nil {
+		slog.Error("retry later", "song", j.SongID, "err", err)
+	}
+	state := StateQueued
+	_ = m.DB.UpdateSong(ctx, j.SongID, store.SongUpdate{State: &state, Error: &msg})
+	slog.Info("download blocked, trying again later", "song", j.SongID, "at", at.Format(time.Kitchen))
 	m.changed(j.SongID)
 }
 
@@ -283,7 +304,7 @@ func (m *Manager) handleFailure(ctx context.Context, j *store.Job, cause error) 
 		m.startLyricsIfReady(ctx, j.SongID)
 	case StageDownload, StageVideo, StageQuick:
 		state, msg := StateFailed, "Couldn't get this song. Try another one."
-		if strings.Contains(cause.Error(), "not a bot") {
+		if tools.IsBlocked(cause) {
 			msg = "YouTube blocked this download. Try again later."
 		}
 		_ = m.DB.UpdateSong(ctx, j.SongID, store.SongUpdate{State: &state, Error: &msg})

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func open(t *testing.T) *Store {
@@ -140,6 +141,40 @@ func TestFuzzySearchForgivesTyposAndFindsLyrics(t *testing.T) {
 	}
 	if page, _ := s.FuzzySongs(ctx, "completely different", 10); len(page.Items) != 0 {
 		t.Errorf("unrelated search matched: %+v", page.Items)
+	}
+}
+
+func TestABlockedJobWaitsUntilItsTime(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.EnqueueJob(ctx, "aaaaaaaaaaa", "download"); err != nil {
+		t.Fatal(err)
+	}
+	if j, err := s.ClaimJob(ctx, []string{"download"}); err != nil || j == nil || j.Blocked != 0 {
+		t.Fatalf("%+v %v", j, err)
+	}
+	if err := s.RetryJobLater(ctx, "aaaaaaaaaaa", "download", "blocked", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if j, _ := s.ClaimJob(ctx, []string{"download"}); j != nil {
+		t.Fatalf("claimed before its time: %+v", j)
+	}
+	if err := s.RetryJobLater(ctx, "aaaaaaaaaaa", "download", "blocked", time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.ClaimJob(ctx, []string{"download"})
+	if err != nil || j == nil || j.Blocked != 2 || j.Attempts != 1 {
+		t.Fatalf("%+v %v", j, err)
+	}
+	if err := s.EnqueueJob(ctx, "aaaaaaaaaaa", "download"); err != nil { // reprocessing starts afresh
+		t.Fatal(err)
+	}
+	if j, _ := s.ClaimJob(ctx, []string{"download"}); j == nil || j.Blocked != 0 {
+		t.Fatalf("%+v", j)
 	}
 }
 

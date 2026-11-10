@@ -225,6 +225,16 @@ func Search(ctx context.Context, query string, start, count int) ([]SearchResult
 	return results, nil
 }
 
+// IsBlocked reports whether YouTube refused a download for now, with its
+// "confirm you're not a bot" check or by limiting requests.
+func IsBlocked(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not a bot") || strings.Contains(msg, "http error 429") || strings.Contains(msg, "too many requests")
+}
+
 // UpdateYtDlp runs yt-dlp's self-update, when it was installed standalone.
 func UpdateYtDlp(ctx context.Context) (string, error) {
 	out, err := command(ctx, false, "yt-dlp", "-U").CombinedOutput()
