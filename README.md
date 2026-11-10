@@ -67,9 +67,9 @@ Then open these, replacing `<server>` with the address printed at startup:
 | Admin | `http://<server>:7464/admin` |
 | Phone | Scan the QR code on the TV |
 
-The first start creates an admin password. It's printed once and saved to `data/metadata/initial-admin-password.txt`. You'll choose a new one when you log in, and the file is then deleted.
+The first time you open Admin, it asks you to create a password. Do this before guests join, since anyone on the network could create it first.
 
-If you forget the password, run this from the project folder:
+If you forget the password, run this from the project folder, then open Admin to create a new one:
 
 ```bash
 bin/karaokedock admin reset-password

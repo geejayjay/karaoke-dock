@@ -14,7 +14,6 @@ export interface Status {
   mediaRoot: string
   move: { running: boolean; done: number; target: string; error?: string } | null
   disk: Record<string, { free: number; total: number } | null>
-  mustChange: boolean
 }
 
 const props = defineProps<{ status?: Status; qrStamp: number }>()

@@ -55,8 +55,8 @@ func setup(t *testing.T) *fixture {
 	p := player.New(db, cfg, jm, m, 8080)
 	jm.SetNotifier(p)
 	ad := admin.New(db, cfg, dir)
-	pw, err := ad.ResetPassword(ctx)
-	if err != nil {
+	pw := "test-password"
+	if err := ad.Setup(ctx, pw); err != nil {
 		t.Fatal(err)
 	}
 	var web fs.FS = fstest.MapFS{"tv.html": {Data: []byte("<html>tv</html>")}}
@@ -189,6 +189,47 @@ func TestAdminLoginAndOriginCheck(t *testing.T) {
 	r3.Body.Close()
 	if r3.StatusCode != 200 {
 		t.Fatal(r3.StatusCode)
+	}
+}
+
+func TestFirstPasswordSetup(t *testing.T) {
+	f := setup(t)
+	origin := map[string]string{"Origin": f.srv.URL}
+	// The fixture already made a password, so setting up again is refused.
+	if c := post(t, f, "/api/admin/setup", `{"password":"another-one"}`, origin).StatusCode; c != 409 {
+		t.Fatal(c)
+	}
+	if err := f.api.Admin.ResetPassword(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c := post(t, f, "/api/admin/login", fmt.Sprintf(`{"password":%q}`, f.pw), origin).StatusCode; c != 401 {
+		t.Fatal("old password still works", c)
+	}
+	if c := post(t, f, "/api/admin/setup", `{"password":"short"}`, origin).StatusCode; c != 400 {
+		t.Fatal(c)
+	}
+	resp := post(t, f, "/api/admin/setup", `{"password":"brand-new-pass"}`, origin)
+	if resp.StatusCode != 200 || len(resp.Cookies()) == 0 {
+		t.Fatal(resp.StatusCode)
+	}
+	if c := post(t, f, "/api/admin/login", `{"password":"brand-new-pass"}`, origin).StatusCode; c != 200 {
+		t.Fatal(c)
+	}
+}
+
+func TestSettingsSaveAcceptsNumbers(t *testing.T) {
+	f := setup(t)
+	resp := post(t, f, "/api/admin/login", fmt.Sprintf(`{"password":%q}`, f.pw), map[string]string{"Origin": f.srv.URL})
+	req, _ := http.NewRequest("PATCH", f.srv.URL+"/api/admin/settings", strings.NewReader(`{"QUEUE_LIMIT":4,"COUNTDOWN":false}`))
+	req.Header.Set("Origin", f.srv.URL)
+	req.AddCookie(resp.Cookies()[0])
+	r, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	if r.StatusCode != 200 || f.cfg.Get(settings.QueueLimit) != "4" || f.cfg.Get(settings.Countdown) != "false" {
+		t.Fatal(r.StatusCode, f.cfg.Get(settings.QueueLimit), f.cfg.Get(settings.Countdown))
 	}
 }
 

@@ -46,6 +46,8 @@ const qc = useQueryClient()
 const page = ref('Overview')
 const current = computed(() => groups.flatMap((g) => g.items).find((i) => i.page === page.value)!)
 const password = ref('')
+const passwordAgain = ref('')
+const needsSetup = ref(false)
 const loginError = ref('')
 const needRestart = ref(false)
 const pwCurrent = ref('')
@@ -57,7 +59,7 @@ const toolMessage = ref('')
 
 const settings = useQuery({
   queryKey: ['settings'],
-  queryFn: () => api<{ defs: Def[]; values: Record<string, string>; mustChange: boolean }>('/api/admin/settings'),
+  queryFn: () => api<{ defs: Def[]; values: Record<string, string> }>('/api/admin/settings'),
   enabled: computed(() => signedIn.value === true),
 })
 const status = useQuery({
@@ -66,7 +68,6 @@ const status = useQuery({
   enabled: computed(() => signedIn.value === true),
   refetchInterval: 5000,
 })
-const mustChange = computed(() => settings.data.value?.mustChange ?? false)
 const hasSettings = computed(() => !['Overview', 'Library', 'Song status', 'System'].includes(page.value))
 
 onMounted(async () => {
@@ -74,9 +75,30 @@ onMounted(async () => {
     await api('/api/admin/status')
     signedIn.value = true
   } catch {
+    // No password yet: ask for one instead of a sign-in.
+    needsSetup.value = await api<{ needed: boolean }>('/api/admin/setup').then((r) => r.needed).catch(() => false)
     signedIn.value = false
   }
 })
+
+async function createPassword() {
+  loginError.value = ''
+  if (password.value !== passwordAgain.value) {
+    loginError.value = "The passwords don't match."
+    return
+  }
+  try {
+    await send('POST', '/api/admin/setup', { password: password.value })
+    password.value = passwordAgain.value = ''
+    needsSetup.value = false
+    signedIn.value = true
+    await qc.invalidateQueries()
+  } catch (e) {
+    loginError.value = (e as Error).message
+    // Someone else created it first.
+    if (/already/.test(loginError.value)) needsSetup.value = false
+  }
+}
 
 async function login() {
   loginError.value = ''
@@ -160,27 +182,18 @@ const authCard = 'w-full max-w-sm space-y-5 rounded-2xl border border-ink-800 bg
     <div :class="authCard">
       <div class="text-center">
         <BrandMark class="justify-center text-4xl" />
-        <p class="mt-1 text-sm text-ink-300">Sign in to manage your karaoke.</p>
+        <p class="mt-1 text-sm text-ink-300">{{ needsSetup ? 'Welcome! Create a password to manage your karaoke.' : 'Sign in to manage your karaoke.' }}</p>
       </div>
-      <form class="space-y-3" @submit.prevent="login">
+      <form v-if="needsSetup" class="space-y-3" @submit.prevent="createPassword">
+        <input v-model="password" type="password" autocomplete="new-password" placeholder="New password, 8 characters or more" :class="input" />
+        <input v-model="passwordAgain" type="password" autocomplete="new-password" placeholder="Type it again" :class="input" />
+        <p v-if="loginError" class="text-sm text-red-300">{{ loginError }}</p>
+        <button :class="primary">Create password</button>
+      </form>
+      <form v-else class="space-y-3" @submit.prevent="login">
         <input v-model="password" type="password" autocomplete="current-password" placeholder="Admin password" :class="input" />
         <p v-if="loginError" class="text-sm text-red-300">{{ loginError }}</p>
         <button :class="primary">Sign in</button>
-      </form>
-    </div>
-  </main>
-
-  <main v-else-if="mustChange" class="flex min-h-[100dvh] items-center justify-center p-5">
-    <div :class="authCard">
-      <div>
-        <h1 class="text-2xl font-bold">Choose your password</h1>
-        <p class="mt-1 text-sm text-ink-300">Replace the generated password with one you'll remember.</p>
-      </div>
-      <form class="space-y-3" @submit.prevent="changePassword">
-        <input v-model="pwCurrent" type="password" autocomplete="current-password" placeholder="Generated password" :class="input" />
-        <input v-model="pwNext" type="password" autocomplete="new-password" placeholder="New password" :class="input" />
-        <p v-if="pwMessage" class="text-sm text-ink-300">{{ pwMessage }}</p>
-        <button :class="primary">Save password</button>
       </form>
     </div>
   </main>

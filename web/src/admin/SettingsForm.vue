@@ -53,7 +53,9 @@ const props = defineProps<{ defs: Def[]; values: Record<string, string>; page: s
 const emit = defineEmits<{ restart: [] }>()
 const qc = useQueryClient()
 
-const draft = ref<Record<string, string>>({})
+// Number boxes give numbers back, so values are compared and sent as text.
+const draft = ref<Record<string, string | number>>({})
+const text = (key: string) => String(draft.value[key] ?? '')
 const errors = ref<Record<string, string>>({})
 const message = ref('')
 const showAdvanced = ref(false)
@@ -64,7 +66,10 @@ const hidden = (d: Def) => d.key === 'COUNTDOWN_SECONDS' && draft.value.COUNTDOW
 const basic = computed(() => props.defs.filter((d) => d.page === props.page && !d.advanced))
 const advanced = computed(() => props.defs.filter((d) => d.page === props.page && d.advanced))
 const shown = computed(() => basic.value.filter((d) => !hidden(d)))
-const dirty = computed(() => [...basic.value, ...advanced.value].some((d) => draft.value[d.key] !== props.values[d.key]))
+const dirty = computed(() => [...basic.value, ...advanced.value].some((d) => text(d.key) !== props.values[d.key]))
+
+const saved = computed(() => !dirty.value && message.value === 'Saved')
+const note = computed(() => (saved.value ? 'Saved' : message.value && message.value !== 'Saved' ? message.value : 'You have unsaved changes'))
 
 const labelOf = (d: Def) => FRIENDLY[d.key]?.label ?? d.label
 const hintOf = (d: Def) => FRIENDLY[d.key]?.hint
@@ -81,17 +86,21 @@ async function save() {
   message.value = ''
   const changes: Record<string, string> = {}
   for (const d of [...basic.value, ...advanced.value]) {
-    if (draft.value[d.key] !== props.values[d.key]) changes[d.key] = draft.value[d.key]
+    if (text(d.key) !== props.values[d.key]) changes[d.key] = text(d.key)
   }
   try {
     const res = await send<{ restart: boolean }>('PATCH', '/api/admin/settings', changes)
+    await qc.invalidateQueries({ queryKey: ['settings'] })
     message.value = 'Saved'
     if (res.restart) emit('restart')
-    await qc.invalidateQueries({ queryKey: ['settings'] })
   } catch (e) {
     const err = e as ApiError
-    if (err.fields) errors.value = err.fields
-    else message.value = err.message
+    if (err.fields) {
+      errors.value = err.fields
+      message.value = 'Please fix the highlighted settings.'
+      // Open the advanced settings when the problem is in there.
+      if (advanced.value.some((d) => err.fields?.[d.key])) showAdvanced.value = true
+    } else message.value = err.message
   }
 }
 
@@ -135,7 +144,7 @@ const row = 'flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-center sm:justif
     </template>
 
     <div v-if="dirty || message" class="sticky bottom-3 flex items-center justify-between gap-3 rounded-2xl border border-ink-700 bg-ink-800 px-4 py-3 shadow-lg shadow-black/40">
-      <span class="text-sm" :class="message && !dirty ? 'text-emerald-300' : 'text-ink-100'">{{ dirty ? 'You have unsaved changes' : message }}</span>
+      <span class="text-sm" :class="saved ? 'text-emerald-300' : note === 'You have unsaved changes' ? 'text-ink-100' : 'text-red-300'">{{ note }}</span>
       <div v-if="dirty" class="flex shrink-0 gap-2">
         <button type="button" class="rounded-lg px-4 py-2 text-sm font-medium text-ink-300 hover:text-white" @click="discard">Discard</button>
         <button class="rounded-lg bg-brand px-5 py-2 text-sm font-bold text-white">Save changes</button>

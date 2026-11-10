@@ -77,6 +77,8 @@ func sameOrigin(r *http.Request) bool {
 
 func (s *Server) adminRoutes(mux *http.ServeMux) {
 	a := s.adminOnly
+	mux.HandleFunc("GET /api/admin/setup", s.adminNetwork(s.adminNeedsSetup))
+	mux.HandleFunc("POST /api/admin/setup", s.adminNetwork(s.adminSetup))
 	mux.HandleFunc("POST /api/admin/login", s.adminNetwork(s.adminLogin))
 	mux.HandleFunc("POST /api/admin/logout", a(s.adminLogout))
 	mux.HandleFunc("POST /api/admin/password", a(s.adminPassword))
@@ -122,7 +124,12 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "Bad request.")
 		return
 	}
-	token, err := s.Admin.Login(r.Context(), body.Password)
+	s.signIn(w, r, body.Password)
+}
+
+// signIn checks the password and, if it's right, starts a session.
+func (s *Server) signIn(w http.ResponseWriter, r *http.Request, password string) {
+	token, err := s.Admin.Login(r.Context(), password)
 	if errors.Is(err, admin.ErrThrottled) {
 		writeErr(w, http.StatusTooManyRequests, "Too many tries. Wait a moment.")
 		return
@@ -133,7 +140,30 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode,
 		Secure: s.isHTTPS(r), MaxAge: int(admin.SessionLifetime().Seconds())})
-	writeJSON(w, 200, map[string]bool{"mustChange": s.Admin.MustChange()})
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) adminNeedsSetup(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, map[string]bool{"needed": s.Admin.NeedsSetup()})
+}
+
+// adminSetup creates the first admin password and signs in with it.
+func (s *Server) adminSetup(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Password string `json:"password"`
+	}
+	if readJSON(r, &body) != nil {
+		writeErr(w, http.StatusBadRequest, "Bad request.")
+		return
+	}
+	if err := s.Admin.Setup(r.Context(), body.Password); errors.Is(err, admin.ErrSetupDone) {
+		writeErr(w, http.StatusConflict, "A password has already been created. Sign in with it.")
+		return
+	} else if err != nil {
+		writeErr(w, http.StatusBadRequest, capitalize(err.Error()))
+		return
+	}
+	s.signIn(w, r, body.Password)
 }
 
 func (s *Server) adminLogout(w http.ResponseWriter, r *http.Request) {
@@ -168,14 +198,29 @@ func capitalize(s string) string {
 }
 
 func (s *Server) adminGetSettings(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, 200, map[string]any{"defs": settings.Defs, "values": s.Settings.All(), "mustChange": s.Admin.MustChange()})
+	writeJSON(w, 200, map[string]any{"defs": settings.Defs, "values": s.Settings.All()})
 }
 
 func (s *Server) adminPatchSettings(w http.ResponseWriter, r *http.Request) {
-	var kv map[string]string
-	if readJSON(r, &kv) != nil {
+	var raw map[string]any
+	if readJSON(r, &raw) != nil {
 		writeErr(w, http.StatusBadRequest, "Bad request.")
 		return
+	}
+	// Values are saved as text, but numbers and true/false are fine too.
+	kv := make(map[string]string, len(raw))
+	for k, v := range raw {
+		switch v := v.(type) {
+		case string:
+			kv[k] = v
+		case float64:
+			kv[k] = strconv.FormatFloat(v, 'f', -1, 64)
+		case bool:
+			kv[k] = strconv.FormatBool(v)
+		default:
+			writeErr(w, http.StatusBadRequest, "Bad request.")
+			return
+		}
 	}
 	if _, moved := kv[settings.MediaRoot]; moved && kv[settings.MediaRoot] != s.Settings.Get(settings.MediaRoot) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"fields": map[string]string{settings.MediaRoot: "Use Move files to change this folder."}})
@@ -216,16 +261,15 @@ func (s *Server) adminStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	temp := s.Settings.Get(settings.TempRoot)
 	writeJSON(w, 200, map[string]any{
-		"tools":      tools.Versions(ctx),
-		"encoders":   s.Encoders.Available(),
-		"sidecar":    map[string]any{"running": s.Sidecar.Running(), "devices": s.Sidecar.Devices()},
-		"network":    s.Player.NetworkStatus(),
-		"joinUrl":    s.Player.JoinURL(),
-		"hostPin":    s.Settings.Get(settings.HostPin),
-		"mediaRoot":  s.Media.Root(),
-		"move":       s.Jobs.CurrentMove(),
-		"disk":       map[string]any{"metadata": disk(s.MetadataDir), "media": disk(s.Media.Root()), "temp": disk(temp)},
-		"mustChange": s.Admin.MustChange(),
+		"tools":     tools.Versions(ctx),
+		"encoders":  s.Encoders.Available(),
+		"sidecar":   map[string]any{"running": s.Sidecar.Running(), "devices": s.Sidecar.Devices()},
+		"network":   s.Player.NetworkStatus(),
+		"joinUrl":   s.Player.JoinURL(),
+		"hostPin":   s.Settings.Get(settings.HostPin),
+		"mediaRoot": s.Media.Root(),
+		"move":      s.Jobs.CurrentMove(),
+		"disk":      map[string]any{"metadata": disk(s.MetadataDir), "media": disk(s.Media.Root()), "temp": disk(temp)},
 	})
 }
 

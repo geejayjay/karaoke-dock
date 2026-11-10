@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,13 +24,10 @@ import (
 
 const (
 	hashKey         = "ADMIN_PASSWORD_HASH"
-	mustChangeKey   = "ADMIN_MUST_CHANGE"
-	passwordLen     = 24
+	mustChangeKey   = "ADMIN_MUST_CHANGE" // only set by older versions
+	minPasswordLen  = 8
 	sessionLifetime = 12 * time.Hour
-	initialFile     = "initial-admin-password.txt"
 )
-
-const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
 
 // Argon2id cost.
 const (
@@ -48,6 +44,7 @@ type Service struct {
 	settings    *settings.Manager
 	metadataDir string
 
+	setupMu  sync.Mutex
 	mu       sync.Mutex
 	failures int
 	lockedTo time.Time
@@ -56,18 +53,6 @@ type Service struct {
 // New creates the service.
 func New(db *store.Store, s *settings.Manager, metadataDir string) *Service {
 	return &Service{db: db, settings: s, metadataDir: metadataDir}
-}
-
-func generatePassword() string {
-	b := make([]byte, passwordLen)
-	for i := range b {
-		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(alphabet))))
-		if err != nil {
-			panic(err)
-		}
-		b[i] = alphabet[n.Int64()]
-	}
-	return string(b)
 }
 
 func hashPassword(pw string) (string, error) {
@@ -99,47 +84,58 @@ func verifyPassword(encoded, pw string) bool {
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
-func (s *Service) initialPath() string { return filepath.Join(s.metadataDir, initialFile) }
+// legacyFile held the generated password of older versions.
+const legacyFile = "initial-admin-password.txt"
 
-// EnsurePassword generates the password on first start and shows it once.
-func (s *Service) EnsurePassword(ctx context.Context) error {
-	if s.settings.Get(hashKey) != "" {
-		return nil
+// Prepare runs at start. Older versions made up a first password and asked
+// for a new one at the first sign-in. If that never happened, the password is
+// cleared so the admin page asks for one instead.
+func (s *Service) Prepare(ctx context.Context) error {
+	if s.settings.Bool(mustChangeKey) {
+		if err := s.settings.SetRaw(ctx, map[string]string{hashKey: "", mustChangeKey: "false"}); err != nil {
+			return err
+		}
 	}
-	pw, err := s.setGenerated(ctx)
-	if err != nil {
+	if err := os.Remove(filepath.Join(s.metadataDir, legacyFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	fmt.Printf("\n==== KaraokeDock admin password (shown once) ====\n%s\nAlso saved to: %s\n=================================================\n\n", pw, s.initialPath())
+	if s.NeedsSetup() {
+		fmt.Print("\nNo admin password yet. Open the admin page to create one.\n\n")
+	}
 	return nil
 }
 
-// ResetPassword makes a new password. It runs from the command line.
-func (s *Service) ResetPassword(ctx context.Context) (string, error) {
-	pw, err := s.setGenerated(ctx)
-	if err != nil {
-		return "", err
-	}
-	return pw, s.db.DeleteAllSessions(ctx)
-}
+// NeedsSetup reports whether no admin password has been created yet.
+func (s *Service) NeedsSetup() bool { return s.settings.Get(hashKey) == "" }
 
-func (s *Service) setGenerated(ctx context.Context) (string, error) {
-	pw := generatePassword()
+// ErrSetupDone means a password already exists.
+var ErrSetupDone = errors.New("a password has already been created")
+
+// Setup creates the first admin password. It only works while there is none.
+func (s *Service) Setup(ctx context.Context, pw string) error {
+	s.setupMu.Lock()
+	defer s.setupMu.Unlock()
+	if !s.NeedsSetup() {
+		return ErrSetupDone
+	}
+	if len(pw) < minPasswordLen {
+		return errors.New("use at least 8 characters")
+	}
 	h, err := hashPassword(pw)
 	if err != nil {
-		return "", err
+		return err
 	}
-	if err := s.settings.SetRaw(ctx, map[string]string{hashKey: h, mustChangeKey: "true"}); err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(s.initialPath(), []byte(pw+"\n"), 0o600); err != nil {
-		return "", err
-	}
-	return pw, nil
+	return s.settings.SetRaw(ctx, map[string]string{hashKey: h})
 }
 
-// MustChange reports whether the first-login change is outstanding.
-func (s *Service) MustChange() bool { return s.settings.Bool(mustChangeKey) }
+// ResetPassword removes the password and signs everyone out, so the admin page
+// asks for a new one. It runs from the command line.
+func (s *Service) ResetPassword(ctx context.Context) error {
+	if err := s.settings.SetRaw(ctx, map[string]string{hashKey: "", mustChangeKey: "false"}); err != nil {
+		return err
+	}
+	return s.db.DeleteAllSessions(ctx)
+}
 
 // ErrThrottled means too many failed logins.
 var ErrThrottled = errors.New("too many attempts")
@@ -212,7 +208,7 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 	return s.db.DeleteSession(ctx, hashToken(token))
 }
 
-// ChangePassword replaces the password and removes the initial file.
+// ChangePassword replaces the password.
 func (s *Service) ChangePassword(ctx context.Context, current, next string) error {
 	if !s.Allow() {
 		return ErrThrottled
@@ -221,7 +217,7 @@ func (s *Service) ChangePassword(ctx context.Context, current, next string) erro
 		s.Failed()
 		return errors.New("current password is wrong")
 	}
-	if len(next) < 8 {
+	if len(next) < minPasswordLen {
 		return errors.New("use at least 8 characters")
 	}
 	s.Succeeded()
@@ -229,11 +225,5 @@ func (s *Service) ChangePassword(ctx context.Context, current, next string) erro
 	if err != nil {
 		return err
 	}
-	if err := s.settings.SetRaw(ctx, map[string]string{hashKey: h, mustChangeKey: "false"}); err != nil {
-		return err
-	}
-	if err := os.Remove(s.initialPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
+	return s.settings.SetRaw(ctx, map[string]string{hashKey: h})
 }

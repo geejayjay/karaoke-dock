@@ -123,11 +123,10 @@ func resetPassword(args []string) error {
 		return err
 	}
 	defer db.Close()
-	pw, err := admin.New(db, cfg, o.metadata).ResetPassword(ctx)
-	if err != nil {
+	if err := admin.New(db, cfg, o.metadata).ResetPassword(ctx); err != nil {
 		return err
 	}
-	fmt.Println("New admin password:", pw)
+	fmt.Println("Admin password removed. Open the admin page to create a new one.")
 	return nil
 }
 
@@ -149,7 +148,7 @@ func run() error {
 	defer db.Close()
 
 	adminSvc := admin.New(db, cfg, o.metadata)
-	if err := adminSvc.EnsurePassword(ctx); err != nil {
+	if err := adminSvc.Prepare(ctx); err != nil {
 		return err
 	}
 
