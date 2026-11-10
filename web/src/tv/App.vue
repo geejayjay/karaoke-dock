@@ -13,6 +13,11 @@ const started = ref(false)
 const connected = ref(false)
 const joinUrl = ref('')
 const qrStamp = ref(0)
+/** The join address in three parts, so the room code can stand out. */
+const joinParts = computed(() => {
+  const m = /^https?:\/\/([^/]+)(\/.*?)([^/]*)$/.exec(joinUrl.value)
+  return m ? { host: m[1], path: m[2], room: m[3] } : { host: joinUrl.value, path: '', room: '' }
+})
 const network = ref<Network>({ online: false, mediaOk: true })
 const playback = ref<PlaybackSettings>({ animationLevel: 'auto', countdown: true, countdownSeconds: 10 })
 const upNext = ref<QueueItem[]>([])
@@ -487,8 +492,11 @@ onBeforeUnmount(() => {
         <span :key="prepLeft" class="get-ready-count">{{ prepLeft }}</span>
       </div>
       <div v-if="prepLeft > 0" class="get-ready-qr">
-        <div class="qr-big"><img :src="`/api/qr.png?v=${qrStamp}`" alt="QR code to join" /></div>
-        <div class="get-ready-url">{{ joinUrl }}</div>
+        <div class="qr-big"><img :src="`/api/qr.svg?v=${qrStamp}`" alt="QR code to join" /></div>
+        <div v-if="joinUrl" class="join-url">
+          <span class="join-label">or type</span>
+          <span class="join-addr"><span class="join-host">{{ joinParts.host }}</span><span class="join-path">{{ joinParts.path }}</span><b class="join-room">{{ joinParts.room }}</b></span>
+        </div>
       </div>
       <div class="lyrics-box" :class="{ waiting: prepLeft > 0 }"><div ref="lyricsHost" /></div>
       <div class="music-break" :class="{ on: breakLabel && prepLeft === 0 }">{{ breakLabel }}</div>
@@ -503,7 +511,7 @@ onBeforeUnmount(() => {
         <div ref="progressHost" />
       </div>
       <div v-show="prepLeft === 0" class="corner-right">
-        <div class="qr-small"><img :src="`/api/qr.png?v=${qrStamp}`" alt="" /></div>
+        <div class="qr-small"><img :src="`/api/qr.svg?v=${qrStamp}`" alt="" /></div>
         <div v-if="comingUp.length" class="up-next">
           <b>Up next</b>
           <div v-for="q in comingUp.slice(0, 3)" :key="q.id">{{ q.song.title }}</div>
@@ -518,8 +526,11 @@ onBeforeUnmount(() => {
         <div class="idle-hint">Scan to add a song</div>
       </div>
       <div class="idle-qr">
-        <div class="qr-big"><img :src="`/api/qr.png?v=${qrStamp}`" alt="QR code to join" /></div>
-        <div class="get-ready-url">{{ joinUrl }}</div>
+        <div class="qr-big"><img :src="`/api/qr.svg?v=${qrStamp}`" alt="QR code to join" /></div>
+        <div v-if="joinUrl" class="join-url">
+          <span class="join-label">or type</span>
+          <span class="join-addr"><span class="join-host">{{ joinParts.host }}</span><span class="join-path">{{ joinParts.path }}</span><b class="join-room">{{ joinParts.room }}</b></span>
+        </div>
       </div>
     </div>
 

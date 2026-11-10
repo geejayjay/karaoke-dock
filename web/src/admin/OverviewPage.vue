@@ -40,6 +40,14 @@ const health = computed(() => [
 
 const music = computed(() => props.status?.disk?.media ?? Object.values(props.status?.disk ?? {})[0] ?? null)
 const usedPercent = computed(() => (music.value?.total ? Math.round((1 - music.value.free / music.value.total) * 100) : 0))
+/** The TV page, on the same address guests use. */
+const tvUrl = computed(() => {
+  try {
+    return props.status?.joinUrl ? new URL('/tv', props.status.joinUrl).href : ''
+  } catch {
+    return ''
+  }
+})
 const gb = (n?: number) => (n === undefined ? '-' : `${(n / 1024 ** 3).toFixed(0)} GB`)
 const card = 'rounded-2xl border border-ink-800 bg-ink-900 p-5'
 </script>
@@ -55,11 +63,20 @@ const card = 'rounded-2xl border border-ink-800 bg-ink-900 p-5'
 
     <div class="grid gap-3 lg:grid-cols-2">
       <section :class="card" class="flex items-center gap-5">
-        <img :src="`/api/qr.png?v=${qrStamp}`" alt="QR code to join" class="h-32 w-32 shrink-0 rounded-xl bg-white p-1.5" />
+        <img :src="`/api/qr.svg?v=${qrStamp}`" alt="QR code to join" class="h-32 w-32 shrink-0 rounded-xl bg-white p-1.5" />
         <div class="min-w-0">
           <h2 class="font-bold">Invite people</h2>
           <p class="mt-1 text-sm text-ink-300">Guests scan this to add songs from their phones.</p>
-          <p class="mt-2 break-all text-sm text-ink-100">{{ status?.joinUrl }}</p>
+          <dl class="mt-3 space-y-1.5 text-sm">
+            <div>
+              <dt class="text-xs font-semibold uppercase tracking-wide text-ink-500">Phones</dt>
+              <dd><a :href="status?.joinUrl" target="_blank" rel="noopener" class="break-all text-ink-100 underline-offset-2 hover:underline">{{ status?.joinUrl }}</a></dd>
+            </div>
+            <div v-if="tvUrl">
+              <dt class="text-xs font-semibold uppercase tracking-wide text-ink-500">TV</dt>
+              <dd><a :href="tvUrl" target="_blank" rel="noopener" class="break-all text-ink-100 underline-offset-2 hover:underline">{{ tvUrl }}</a></dd>
+            </div>
+          </dl>
         </div>
       </section>
 

@@ -226,7 +226,7 @@ const authCard = 'w-full max-w-sm space-y-5 rounded-2xl border border-ink-800 bg
         <SettingsForm v-if="hasSettings" :defs="settings.data.value.defs" :values="settings.data.value.values" :page="page" @restart="needRestart = true" />
 
         <section v-if="page === 'Network'" :class="card" class="flex items-center gap-5 space-y-0">
-          <img :src="`/api/qr.png?v=${status.dataUpdatedAt.value}`" alt="" class="h-32 w-32 shrink-0 rounded-xl bg-white p-1.5" />
+          <img :src="`/api/qr.svg?v=${status.dataUpdatedAt.value}`" alt="" class="h-32 w-32 shrink-0 rounded-xl bg-white p-1.5" />
           <div class="min-w-0">
             <h3 class="font-bold">This is what guests scan</h3>
             <p class="mt-2 break-all text-sm text-ink-300">{{ status.data.value?.joinUrl }}</p>

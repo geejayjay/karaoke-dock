@@ -26,6 +26,8 @@ export default defineConfig({
       '/api': 'http://localhost:7464',
       '/media': 'http://localhost:7464',
       '/covers': 'http://localhost:7464',
+      '/icon': 'http://localhost:7464',
+      '/fonts': 'http://localhost:7464',
       '/backgrounds': 'http://localhost:7464',
       '/ws': { target: 'ws://localhost:7464', ws: true },
     },

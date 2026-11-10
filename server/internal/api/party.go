@@ -1,14 +1,11 @@
 package api
 
 import (
-	"bytes"
+	"embed"
 	"encoding/json"
-	"image"
-	"image/color"
-	"image/png"
-	"math"
 	"net/http"
-	"strconv"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,6 +20,11 @@ func (s *Server) partyRoutes(mux *http.ServeMux, room, host func(http.HandlerFun
 	mux.HandleFunc("POST /api/react", room(s.react))
 	mux.HandleFunc("GET /r/{room}/manifest.webmanifest", s.manifest)
 	mux.HandleFunc("GET /icon/{size}", s.icon)
+	mux.HandleFunc("GET /icon.svg", s.iconSVG)
+	mux.HandleFunc("GET /fonts/script", s.scriptFont)
+	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/icon/192", http.StatusMovedPermanently)
+	})
 }
 
 // canEditItem allows the person who queued a song, or the host.
@@ -132,58 +134,49 @@ func (s *Server) manifest(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-var iconSizes = map[int]bool{180: true, 192: true, 512: true}
+// iconFiles are the logo, drawn by assets/make_logo.py.
+//
+//go:embed icons
+var iconFiles embed.FS
 
+var iconSizes = map[string]bool{"180": true, "192": true, "512": true}
+
+// icon serves the logo as a PNG of a given size, for home screens.
 func (s *Server) icon(w http.ResponseWriter, r *http.Request) {
-	size, err := strconv.Atoi(r.PathValue("size"))
-	if err != nil || !iconSizes[size] {
+	size := r.PathValue("size")
+	if !iconSizes[size] {
 		http.NotFound(w, r)
 		return
 	}
-	var out bytes.Buffer
-	if err := png.Encode(&out, halftoneIcon(size)); err != nil {
-		fail(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Cache-Control", "public, max-age=604800")
-	_, _ = w.Write(out.Bytes())
+	serveIcon(w, r, "icons/icon-"+size+".png", "image/png")
 }
 
-// halftoneIcon draws a circle of dots that shrink towards its edge.
-func halftoneIcon(size int) image.Image {
-	img := image.NewRGBA(image.Rect(0, 0, size, size))
-	dark := color.RGBA{13, 11, 20, 255}
-	for y := range size {
-		for x := range size {
-			img.SetRGBA(x, y, dark)
-		}
+// iconSVG serves the logo as the browser tab icon.
+func (s *Server) iconSVG(w http.ResponseWriter, r *http.Request) {
+	serveIcon(w, r, "icons/icon.svg", "image/svg+xml")
+}
+
+func serveIcon(w http.ResponseWriter, r *http.Request, name, contentType string) {
+	raw, err := iconFiles.ReadFile(name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
 	}
-	center := float64(size) / 2
-	cell := float64(size) / 16
-	reach := float64(size) * 0.42
-	for row := -9.0; row <= 9; row++ {
-		offset := 0.0
-		if int(row)%2 != 0 {
-			offset = cell / 2
-		}
-		for col := -9.0; col <= 9; col++ {
-			cx, cy := center+col*cell+offset, center+row*cell*0.87
-			dist := math.Hypot(cx-center, cy-center)
-			if dist >= reach {
-				continue
-			}
-			radius := cell * 0.48 * (1 - dist/reach*0.75)
-			mix := (cx + cy) / float64(2*size)
-			c := color.RGBA{uint8(255 - 112*mix), uint8(77 + 30*mix), uint8(141 + 114*mix), 255}
-			for py := int(cy - radius); py <= int(cy+radius)+1; py++ {
-				for px := int(cx - radius); px <= int(cx+radius)+1; px++ {
-					if math.Hypot(float64(px)-cx, float64(py)-cy) <= radius && px >= 0 && py >= 0 && px < size && py < size {
-						img.SetRGBA(px, py, c)
-					}
-				}
-			}
-		}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "public, max-age=604800")
+	_, _ = w.Write(raw)
+}
+
+// scriptFont serves an optional font for the "dock" in the name, from
+// <metadata>/fonts/script.otf. It isn't part of the app, so a font that can't be
+// shared stays on this machine. Without it, pages use the built-in script font.
+func (s *Server) scriptFont(w http.ResponseWriter, r *http.Request) {
+	path := filepath.Join(s.MetadataDir, "fonts", "script.otf")
+	if _, err := os.Stat(path); err != nil {
+		http.NotFound(w, r)
+		return
 	}
-	return img
+	w.Header().Set("Content-Type", "font/otf")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	http.ServeFile(w, r, path)
 }

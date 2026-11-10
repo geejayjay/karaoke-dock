@@ -60,7 +60,15 @@ body { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', '
 .lyrics-box { position: absolute; inset: 0; transition: opacity .35s ease; }
 .lyrics-box.waiting { opacity: 0; }
 .get-ready-qr { position: absolute; right: 7%; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; align-items: center; gap: 1.4vh; }
-.get-ready-url { max-width: 42vh; font-size: 1.5vh; color: rgba(255,255,255,.72); text-align: center; word-break: break-all; }
+/* The join address under the QR: a soft pill with the room code picked out. */
+.join-url { display: flex; flex-direction: column; align-items: center; gap: .9vh; max-width: 46vh; }
+.join-label { font-size: 1.35vh; font-weight: 700; letter-spacing: .32em; text-transform: uppercase; color: rgba(203,188,255,.55); }
+.join-addr { display: inline-flex; align-items: baseline; flex-wrap: wrap; justify-content: center; padding: .9vh 2.2vh; border-radius: 99vh;
+  background: rgba(13,11,20,.55); border: 1px solid rgba(203,188,255,.22); box-shadow: 0 0 2.4vh rgba(143,107,255,.18), inset 0 0 1.2vh rgba(143,107,255,.08);
+  font-size: 2.1vh; font-weight: 600; letter-spacing: .02em; font-variant-numeric: tabular-nums; text-shadow: 0 .2vh .6vh rgba(0,0,0,.6); }
+.join-host { color: rgba(255,255,255,.86); }
+.join-path { color: rgba(203,188,255,.5); margin: 0 .15em; }
+.join-room { font-weight: 900; letter-spacing: .12em; color: #ff7aa8; background: linear-gradient(90deg, #ff4d8d, #b39bff); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 .get-ready { position: absolute; left: 4%; width: 54%; top: 54%; display: flex; flex-direction: column; align-items: center; gap: 1vh; text-shadow: 0 .4vh 0 rgba(0,0,0,.6); }
 .get-ready-label { font-size: 3.6vh; font-weight: 800; letter-spacing: .02em; }
 .get-ready-count { font-size: 15vh; font-weight: 900; line-height: 1; color: var(--lyric-accent, #ff4d8d); -webkit-text-stroke: .35vh #000; animation: get-ready-pop .9s cubic-bezier(.2,.8,.2,1) both; }
@@ -89,6 +97,7 @@ body { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', '
 .center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 3vh; }
 .brand { font-size: 13vh; text-shadow: 0 .6vh 0 rgba(0,0,0,.55); }
 .brand.stacked { font-size: 21vh; line-height: 1; }
+.brand .brand-logo { filter: drop-shadow(0 .6vh 0 rgba(0,0,0,.55)); }
 
 /* Nothing queued: the logo on the left and a big QR on the right. */
 .idle { position: absolute; inset: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 7%; background: linear-gradient(90deg, rgba(5,4,12,.78), rgba(5,4,12,.5) 52%, rgba(5,4,12,0) 82%); }

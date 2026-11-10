@@ -237,3 +237,20 @@ func TestQueuePlaysFirstPlayableSong(t *testing.T) {
 		t.Fatalf("%+v %v", cur, err)
 	}
 }
+
+func TestTheLogoIsServed(t *testing.T) {
+	f := setup(t)
+	for path, kind := range map[string]string{"/icon.svg": "image/svg+xml", "/icon/180": "image/png", "/icon/192": "image/png", "/icon/512": "image/png"} {
+		resp, err := http.Get(f.srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != kind {
+			t.Errorf("%s: %d %s", path, resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
+	}
+	if resp, err := http.Get(f.srv.URL + "/icon/64"); err != nil || resp.StatusCode != 404 {
+		t.Errorf("unknown size should be missing: %v", err)
+	}
+}

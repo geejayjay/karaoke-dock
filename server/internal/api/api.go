@@ -156,6 +156,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/player/{action}", host(s.playerAction))
 	mux.HandleFunc("GET /ws", s.websocket)
 	mux.HandleFunc("GET /api/qr.png", s.qr)
+	mux.HandleFunc("GET /api/qr.svg", s.qrSVG)
 
 	// Media.
 	mux.HandleFunc("GET /media/{id}/{file}", s.serveSongFile)

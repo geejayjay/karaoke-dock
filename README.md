@@ -79,6 +79,8 @@ On Windows the program is `bin\karaokedock.exe`.
 
 Options: `-port`, `-bind`, `-metadata` and `-sidecar`. The default port is 7464, which spells SING on a phone keypad. `KARAOKEDOCK_PORT` also sets it.
 
+To use your own font for "dock" in the name, save it as `data/metadata/fonts/script.otf`. Without it, a built-in script font is used.
+
 ## Development
 
 On Windows, double-click `dev.bat`, or run it from a terminal. It closes any running copy, rebuilds what changed and starts the app.
