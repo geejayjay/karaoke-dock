@@ -1,0 +1,61 @@
+# Songs, database, models and the first admin password
+data/
+
+# Local setup and start scripts
+scripts/
+
+# Private notes and plans
+docs/
+docx/
+*.docx
+~$*
+
+# AI assistants
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+.cursor/
+.cursorrules
+.windsurf/
+.aider*
+.continue/
+.codex/
+AGENTS.md
+
+# Build output
+bin/
+web/dist/
+server/internal/webui/dist/*
+!server/internal/webui/dist/.gitkeep
+server/karaokedock
+server/karaokedock.exe
+*.exe~
+
+# Python
+sidecar/.venv/
+sidecar/.python/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+*.tsbuildinfo
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Logs and temporary files
+*.log
+*.tmp
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

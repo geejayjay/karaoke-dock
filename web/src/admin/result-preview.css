@@ -1,0 +1,33 @@
+/* The TV's look, sized to its panel instead of the screen. */
+.result-stage { position: relative; overflow: hidden; container-type: size; background: #07060c; color: #fff; }
+.result-stage .layer, .result-stage .bg-plain, .result-stage .dim { position: absolute; inset: 0; }
+.result-stage .bg-plain { background: radial-gradient(circle at 30% 20%, #2a1e52, #0b0916 70%); }
+.result-stage .dim { background: linear-gradient(180deg, rgba(5,4,12,.5), rgba(5,4,12,.25) 26%, rgba(5,4,12,.25) 72%, rgba(5,4,12,.72)); }
+
+.result-stage .lyrics { position: absolute; left: 5%; right: 5%; top: 50%; height: 54cqh; margin-top: -27cqh; font-weight: 900; font-size: 12cqh; letter-spacing: -.025em; }
+.result-stage .lyric-line { position: absolute; left: 0; right: 0; text-align: center; white-space: nowrap; line-height: 1.12; opacity: 0; transform: translate3d(0, 2cqh, 0) scale(.86); transition: opacity .25s ease, transform .35s ease; color: #fff; text-shadow: -.035em -.035em 0 rgba(0,0,0,.8), .035em -.035em 0 rgba(0,0,0,.8), -.035em .035em 0 rgba(0,0,0,.8), .035em .035em 0 rgba(0,0,0,.8), 0 .08em 0 rgba(0,0,0,.7), 0 0 .45em rgba(0,0,0,.7); }
+.result-stage .lyric-line:nth-child(1) { top: 2%; }
+.result-stage .lyric-line:nth-child(2) { top: 52%; }
+.result-stage .lyric-line.show { opacity: .72; transform: translate3d(0, 0, 0) scale(.86); }
+.result-stage .lyric-line.active { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+.result-stage .lyric-line.done { opacity: 0; transform: translate3d(0, -1.5cqh, 0) scale(.86); }
+.result-stage .word { position: relative; display: inline-block; transform-origin: 50% 80%; will-change: transform; }
+.result-stage .word .clip { position: absolute; left: -.08em; top: -.3em; right: -.08em; bottom: -.3em; overflow: hidden; display: block; transform: translateX(-101%); will-change: transform; }
+.result-stage .word .fill { display: block; padding: .3em .08em; color: var(--word-color, var(--lyric-accent)); transform: translateX(101%); will-change: transform; white-space: nowrap; }
+.result-stage .backing-row { font-size: .52em; font-style: italic; font-weight: 700; letter-spacing: 0; line-height: 1.15; margin-top: .1em; }
+.result-stage .word.backing > span:first-child { color: rgba(255,255,255,.62); }
+.result-stage .word.backing .fill { color: #fff; }
+.result-stage .lyric-dots { position: absolute; left: 50%; top: -6%; transform: translateX(-50%); display: flex; gap: 2.2cqh; opacity: 0; transition: opacity .2s; }
+.result-stage .lyric-dots.show { opacity: 1; }
+.result-stage .lyric-dots i { width: 2cqh; height: 2cqh; border-radius: 50%; background: var(--lyric-accent); opacity: .25; transition: opacity .2s; }
+.result-stage .lyric-dots[data-n="3"] i:nth-child(n), .result-stage .lyric-dots[data-n="2"] i:nth-child(-n+2), .result-stage .lyric-dots[data-n="1"] i:nth-child(1) { opacity: 1; }
+
+.result-title { position: absolute; left: 4%; top: 6%; max-width: 92%; display: flex; align-items: center; gap: 2.4cqh; }
+.result-title img { width: 13cqh; height: 13cqh; flex-shrink: 0; border: .6cqh solid #fff; border-radius: .7cqh; object-fit: cover; transform: rotate(-4deg); box-shadow: 1cqh 1cqh 0 rgba(0,0,0,.55); }
+.result-title-text { min-width: 0; }
+.result-cut { position: absolute; left: 50%; top: 40%; transform: translateX(-50%); padding: 1.2cqh 3.6cqh; border-radius: 99px; background: rgba(0,0,0,.6); font-size: 4cqh; font-weight: 700; white-space: nowrap; }
+.result-title h4 { font-size: 5cqh; font-weight: 900; text-transform: uppercase; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 2px 8px rgba(0,0,0,.6); }
+.result-title p { font-size: 3.4cqh; color: rgba(255,255,255,.78); white-space: nowrap; }
+.result-time { position: absolute; right: 4%; bottom: 8.5%; font-size: 3.2cqh; font-weight: 600; font-variant-numeric: tabular-nums; color: rgba(255,255,255,.8); }
+.result-bar { position: absolute; left: 4%; right: 4%; bottom: 5.5%; height: 1.3cqh; border-radius: 99px; overflow: hidden; background: rgba(255,255,255,.2); }
+.result-bar div { height: 100%; transform: scaleX(0); transform-origin: 0 50%; }
