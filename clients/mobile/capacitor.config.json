@@ -1,0 +1,13 @@
+{
+  "appId": "app.karaokedock.mobile",
+  "appName": "KaraokeDock",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true,
+    "backgroundColor": "#0d0b14"
+  }
+}

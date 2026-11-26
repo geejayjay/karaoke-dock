@@ -1,0 +1,20 @@
+[Unit]
+Description=KaraokeDock Self-Hosted Karaoke Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=karaokedock
+Group=karaokedock
+WorkingDirectory=/var/lib/karaokedock
+Environment=KARAOKEDOCK_PORT=7464
+Environment=KARAOKEDOCK_METADATA=/var/lib/karaokedock/metadata
+Environment=KARAOKEDOCK_SIDECAR=/opt/karaokedock/sidecar
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/karaokedock/bin/karaokedock
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

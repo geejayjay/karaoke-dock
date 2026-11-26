@@ -1,0 +1,306 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  server:
+    name: Linux Server (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-amd64
+            goos: linux
+            goarch: amd64
+          - label: linux-arm64
+            goos: linux
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Build embedded web UI
+        working-directory: web
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Cross-compile KaraokeDock binary
+        working-directory: server
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p ../dist/pkg/bin
+          go build -trimpath -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o "../dist/pkg/bin/karaokedock" ./cmd/karaokedock
+
+      - name: Package release archive
+        run: |
+          mkdir -p dist/out dist/pkg/sidecar dist/pkg/deploy
+          cp sidecar/pyproject.toml sidecar/uv.lock dist/pkg/sidecar/
+          cp -r sidecar/karaokedock_ml dist/pkg/sidecar/
+          sed -i 's/\r$//' deploy/install-linux.sh deploy/karaokedock.service
+          cp deploy/install-linux.sh deploy/karaokedock.service dist/pkg/deploy/
+          tar -czf "dist/out/karaokedock-${{ matrix.label }}.tar.gz" -C dist/pkg .
+          if [ "${{ matrix.goarch }}" = "amd64" ]; then
+            cp deploy/install-linux.sh dist/out/install-linux.sh
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-${{ matrix.label }}
+          path: dist/out/*
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          PRERELEASE_FLAG=""
+          case "${TAG}" in *-* ) PRERELEASE_FLAG="--prerelease" ;; esac
+          gh release view "${TAG}" >/dev/null 2>&1 || gh release create "${TAG}" --title "${TAG}" --generate-notes ${PRERELEASE_FLAG} || true
+          for i in 1 2 3 4 5; do
+            gh release upload "${TAG}" dist/out/* --clobber && break
+            sleep 3
+          done
+
+  windows:
+    name: Windows Installer & Portable Zip
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Build embedded web UI
+        working-directory: web
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build Windows Tray App, Installer & Zip
+        shell: pwsh
+        run: |
+          ./deploy/windows/build-windows.ps1 -Version "${{ github.ref_name }}" -OutDir "dist/windows"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-amd64
+          path: |
+            dist/windows/KaraokeDock-Setup.exe
+            dist/windows/karaokedock-windows-amd64.zip
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -ne 0) {
+            if ($env:TAG -like "*-*") { gh release create $env:TAG --title $env:TAG --generate-notes --prerelease }
+            else { gh release create $env:TAG --title $env:TAG --generate-notes }
+          }
+          for ($i = 0; $i -lt 5; $i++) {
+            gh release upload $env:TAG dist/windows/KaraokeDock-Setup.exe dist/windows/karaokedock-windows-amd64.zip --clobber
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep -Seconds 3
+          }
+
+  android:
+    name: Android APK (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [mobile, tv]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+
+      - name: Build shared web UI for ${{ matrix.target }}
+        working-directory: web
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build:${{ matrix.target }}
+
+      - name: Sync Capacitor Android project & assemble APK
+        working-directory: clients/${{ matrix.target }}
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          pnpm install
+          node ../sync-android.mjs ${{ matrix.target }}
+          chmod +x android/gradlew
+          (cd android && ./gradlew assembleRelease --no-daemon)
+
+      - name: Sign & align APK
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          mkdir -p dist/apk
+          UNSIGNED="clients/${{ matrix.target }}/android/app/build/outputs/apk/release/app-release-unsigned.apk"
+          ALIGNED="dist/apk/aligned.apk"
+          OUT="dist/apk/karaokedock-${{ matrix.target }}.apk"
+
+          BUILD_TOOLS="$(ls -d "${ANDROID_HOME}/build-tools/"* | sort -V | tail -n 1)"
+          "${BUILD_TOOLS}/zipalign" -v -p 4 "${UNSIGNED}" "${ALIGNED}"
+
+          if [ -n "${KS_B64}" ]; then
+            echo "${KS_B64}" | base64 -d > /tmp/release.keystore
+          else
+            KS_PASS="karaokedock"
+            KEY_ALIAS="karaokedock"
+            KEY_PASS="karaokedock"
+            keytool -genkeypair -v -keystore /tmp/release.keystore -alias "${KEY_ALIAS}" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "${KS_PASS}" -keypass "${KEY_PASS}" \
+              -dname "CN=KaraokeDock,O=KaraokeDock,C=US"
+          fi
+
+          "${BUILD_TOOLS}/apksigner" sign \
+            --ks /tmp/release.keystore \
+            --ks-key-alias "${KEY_ALIAS}" \
+            --ks-pass "pass:${KS_PASS}" \
+            --key-pass "pass:${KEY_PASS}" \
+            --out "${OUT}" \
+            "${ALIGNED}"
+          rm -f /tmp/release.keystore "${ALIGNED}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ matrix.target }}
+          path: dist/apk/karaokedock-${{ matrix.target }}.apk
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          PRERELEASE_FLAG=""
+          case "${TAG}" in *-* ) PRERELEASE_FLAG="--prerelease" ;; esac
+          gh release view "${TAG}" >/dev/null 2>&1 || gh release create "${TAG}" --title "${TAG}" --generate-notes ${PRERELEASE_FLAG} || true
+          for i in 1 2 3 4 5; do
+            gh release upload "${TAG}" "dist/apk/karaokedock-${{ matrix.target }}.apk" --clobber && break
+            sleep 3
+          done
+
+  docker:
+    name: Docker Image (GHCR & Docker Hub)
+    runs-on: ubuntu-latest
+    env:
+      DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+      DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub (if configured)
+        if: env.DH_USER != '' && env.DH_TOKEN != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DH_USER }}
+          password: ${{ env.DH_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository }}
+            name=${{ env.DH_USER || 'karaokedock' }}/karaokedock,enable=${{ env.DH_USER != '' && env.DH_TOKEN != '' }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

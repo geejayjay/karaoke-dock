@@ -1,0 +1,53 @@
+[project]
+name = "karaokedock-ml"
+version = "0.1.0"
+description = "KaraokeDock AI helper: vocal removal, lyric timing and transcription"
+requires-python = ">=3.12,<3.13"
+dependencies = ["psutil>=5.9", "audioread>=3.0"]
+
+[project.optional-dependencies]
+# torch stays below 2.15 until a torchvision built for it exists on Linux.
+cpu = ["torch>=2.5,<2.15", "torchvision", "torchaudio", "audio-separator[cpu]>=0.30", "stable-ts>=2.18", "rapidocr-onnxruntime>=1.4"]
+cuda = ["torch>=2.5", "torchvision", "torchaudio", "audio-separator[gpu]>=0.30", "stable-ts>=2.18"]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.uv]
+conflicts = [[{ extra = "cpu" }, { extra = "cuda" }]]
+
+# torch, torchvision and torchaudio must come from the same index, or uv mixes
+# builds made for different torch versions and imports fail.
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cuda", extra = "cuda" },
+]
+torchvision = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cuda", extra = "cuda" },
+]
+torchaudio = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cuda", extra = "cuda" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["karaokedock_ml"]
+
+[tool.ruff]
+line-length = 110

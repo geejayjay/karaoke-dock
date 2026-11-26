@@ -1,0 +1,16 @@
+services:
+  karaokedock:
+    image: ghcr.io/geejayjay/karaoke-dock:latest
+    build: .
+    container_name: karaokedock
+    restart: unless-stopped
+    # On Linux / Raspberry Pi / LXC, `network_mode: host` lets KaraokeDock
+    # detect your real Wi-Fi/LAN IP automatically for the TV QR code.
+    # On Windows/macOS Docker Desktop, keep `ports` and set LAN_IP in Admin.
+    ports:
+      - "7464:7464/tcp"
+      - "7464:7464/udp"
+    volumes:
+      - ./data:/data
+    environment:
+      - KARAOKEDOCK_PORT=7464

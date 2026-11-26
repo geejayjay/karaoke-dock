@@ -1,0 +1,392 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io/fs"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"path/filepath"
+	"strings"
+	"testing"
+	"testing/fstest"
+
+	"karaokedock/internal/admin"
+	"karaokedock/internal/jobs"
+	"karaokedock/internal/lyrics"
+	"karaokedock/internal/media"
+	"karaokedock/internal/player"
+	"karaokedock/internal/settings"
+	"karaokedock/internal/sidecar"
+	"karaokedock/internal/store"
+	"karaokedock/internal/tools"
+)
+
+type fixture struct {
+	srv  *httptest.Server
+	api  *Server
+	db   *store.Store
+	cfg  *settings.Manager
+	room string
+	pin  string
+	pw   string
+}
+
+func setup(t *testing.T) *fixture {
+	t.Helper()
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := store.Open(filepath.Join(dir, "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	cfg, err := settings.Load(ctx, db, map[string]string{settings.MediaRoot: filepath.Join(dir, "media"), settings.TempRoot: filepath.Join(dir, "tmp")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := media.NewFs(cfg.Get(settings.MediaRoot))
+	sc := sidecar.New(sidecar.Config{})
+	enc := &tools.Encoders{}
+	amll := lyrics.NewAMLL(filepath.Join(dir, "amll"))
+	jm := jobs.New(jobs.Deps{DB: db, Settings: cfg, Media: m, MetadataDir: dir, Sidecar: sc, Encoders: enc, AMLL: amll})
+	p := player.New(db, cfg, jm, m, 8080)
+	jm.SetNotifier(p)
+	ad := admin.New(db, cfg, dir)
+	pw := "test-password"
+	if err := ad.Setup(ctx, pw); err != nil {
+		t.Fatal(err)
+	}
+	var web fs.FS = fstest.MapFS{"tv.html": {Data: []byte("<html>tv</html>")}}
+	s := &Server{DB: db, Settings: cfg, Jobs: jm, Player: p, Media: m, Admin: ad, Sidecar: sc, Encoders: enc, AMLL: amll,
+		MetadataDir: dir, Web: web, Logs: &LogBuffer{}, Restart: func() {}}
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+	return &fixture{srv: srv, api: s, db: db, cfg: cfg, room: cfg.Get(settings.RoomCode), pin: cfg.Get(settings.HostPin), pw: pw}
+}
+
+func (f *fixture) get(t *testing.T, path string) (int, map[string]any) {
+	t.Helper()
+	req, _ := http.NewRequest("GET", f.srv.URL+path, nil)
+	req.Header.Set("X-Room", f.room)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return resp.StatusCode, out
+}
+
+func TestEveryListIsCappedAndPaged(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	for i := range 130 {
+		id := fmt.Sprintf("song%07d", i)
+		if _, err := f.db.InsertSong(ctx, id, fmt.Sprintf("Title %03d", i)); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.db.SetSongDetails(ctx, id, []store.ArtistInput{{Name: fmt.Sprintf("Singer %03d", i)}}, &store.AlbumInput{Title: fmt.Sprintf("Album %03d", i)}); err != nil {
+			t.Fatal(err)
+		}
+		g, l := fmt.Sprintf("Genre %03d", i), fmt.Sprintf("Lang %03d", i)
+		if err := f.db.UpdateSong(ctx, id, store.SongUpdate{Genre: &g, Language: &l}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.db.AddToQueue(ctx, id, "Sam", "c"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, route := range []string{"/api/songs", "/api/artists", "/api/albums", "/api/genres", "/api/languages", "/api/queue"} {
+		code, body := f.get(t, route)
+		if code != 200 || len(body["items"].([]any)) != store.DefaultLimit || body["nextCursor"] == nil {
+			t.Errorf("%s default: %d %v", route, code, len(body["items"].([]any)))
+		}
+		code, body = f.get(t, route+"?limit=100000")
+		if code != 200 || len(body["items"].([]any)) != store.MaxLimit {
+			t.Errorf("%s capped: %d %v", route, code, len(body["items"].([]any)))
+		}
+		cursor := body["nextCursor"].(string)
+		code, body = f.get(t, route+"?limit=100&cursor="+url.QueryEscape(cursor))
+		if code != 200 || len(body["items"].([]any)) != 30 || body["nextCursor"] != nil {
+			t.Errorf("%s last page: %d %v %v", route, code, len(body["items"].([]any)), body["nextCursor"])
+		}
+	}
+	if code, _ := f.get(t, "/api/songs?cursor=@@@"); code != 400 {
+		t.Errorf("bad cursor: %d", code)
+	}
+	code, body := f.get(t, "/api/artists?from=m&limit=5")
+	if code != 200 || len(body["items"].([]any)) != 5 {
+		t.Errorf("from: %d %v", code, body)
+	}
+}
+
+func TestRoomCodeRequired(t *testing.T) {
+	f := setup(t)
+	resp, err := http.Get(f.srv.URL + "/api/songs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 403 {
+		t.Fatal(resp.StatusCode)
+	}
+}
+
+func post(t *testing.T, f *fixture, path, body string, hdr map[string]string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest("POST", f.srv.URL+path, strings.NewReader(body))
+	req.Header.Set("X-Room", f.room)
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp
+}
+
+// pinOn turns on the host PIN, which is off by default.
+func (f *fixture) pinOn(t *testing.T) {
+	t.Helper()
+	if err := f.cfg.SetRaw(context.Background(), map[string]string{settings.HostPinOn: "true"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEveryoneIsHostWithoutPin(t *testing.T) {
+	f := setup(t)
+	if c := post(t, f, "/api/player/skip", "{}", nil).StatusCode; c != 200 {
+		t.Fatal(c)
+	}
+}
+
+func TestHostPinRequired(t *testing.T) {
+	f := setup(t)
+	f.pinOn(t)
+	if c := post(t, f, "/api/player/skip", "{}", nil).StatusCode; c != 401 {
+		t.Fatal(c)
+	}
+	if c := post(t, f, "/api/player/skip", "{}", map[string]string{"X-Host-Pin": f.pin}).StatusCode; c != 200 {
+		t.Fatal(c)
+	}
+}
+
+func TestAdminLoginAndOriginCheck(t *testing.T) {
+	f := setup(t)
+	if c := post(t, f, "/api/admin/login", `{"password":"nope"}`, map[string]string{"Origin": f.srv.URL}).StatusCode; c != 401 {
+		t.Fatal(c)
+	}
+	body := fmt.Sprintf(`{"password":%q}`, f.pw)
+	if c := post(t, f, "/api/admin/login", body, map[string]string{"Origin": "http://evil.example"}).StatusCode; c != 403 {
+		t.Fatal(c)
+	}
+	resp := post(t, f, "/api/admin/login", body, map[string]string{"Origin": f.srv.URL})
+	if resp.StatusCode != 200 || len(resp.Cookies()) == 0 || !resp.Cookies()[0].HttpOnly {
+		t.Fatal(resp.StatusCode, resp.Cookies())
+	}
+	r2, _ := http.Get(f.srv.URL + "/api/admin/settings")
+	r2.Body.Close()
+	if r2.StatusCode != 401 {
+		t.Fatal(r2.StatusCode)
+	}
+	req, _ := http.NewRequest("GET", f.srv.URL+"/api/admin/settings", nil)
+	req.AddCookie(resp.Cookies()[0])
+	r3, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r3.Body.Close()
+	if r3.StatusCode != 200 {
+		t.Fatal(r3.StatusCode)
+	}
+}
+
+func TestFirstPasswordSetup(t *testing.T) {
+	f := setup(t)
+	origin := map[string]string{"Origin": f.srv.URL}
+	// The fixture already made a password, so setting up again is refused.
+	if c := post(t, f, "/api/admin/setup", `{"password":"another-one"}`, origin).StatusCode; c != 409 {
+		t.Fatal(c)
+	}
+	if err := f.api.Admin.ResetPassword(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c := post(t, f, "/api/admin/login", fmt.Sprintf(`{"password":%q}`, f.pw), origin).StatusCode; c != 401 {
+		t.Fatal("old password still works", c)
+	}
+	if c := post(t, f, "/api/admin/setup", `{"password":"short"}`, origin).StatusCode; c != 400 {
+		t.Fatal(c)
+	}
+	resp := post(t, f, "/api/admin/setup", `{"password":"brand-new-pass"}`, origin)
+	if resp.StatusCode != 200 || len(resp.Cookies()) == 0 {
+		t.Fatal(resp.StatusCode)
+	}
+	if c := post(t, f, "/api/admin/login", `{"password":"brand-new-pass"}`, origin).StatusCode; c != 200 {
+		t.Fatal(c)
+	}
+}
+
+func TestSettingsSaveAcceptsNumbers(t *testing.T) {
+	f := setup(t)
+	resp := post(t, f, "/api/admin/login", fmt.Sprintf(`{"password":%q}`, f.pw), map[string]string{"Origin": f.srv.URL})
+	req, _ := http.NewRequest("PATCH", f.srv.URL+"/api/admin/settings", strings.NewReader(`{"QUEUE_LIMIT":4,"COUNTDOWN":false}`))
+	req.Header.Set("Origin", f.srv.URL)
+	req.AddCookie(resp.Cookies()[0])
+	r, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	if r.StatusCode != 200 || f.cfg.Get(settings.QueueLimit) != "4" || f.cfg.Get(settings.Countdown) != "false" {
+		t.Fatal(r.StatusCode, f.cfg.Get(settings.QueueLimit), f.cfg.Get(settings.Countdown))
+	}
+}
+
+func TestBadVideoIDRejected(t *testing.T) {
+	f := setup(t)
+	for _, id := range []string{"--exec=calc", "short", "aaaaaaaaaa b"} {
+		if c := post(t, f, "/api/songs/import", fmt.Sprintf(`{"videoId":%q}`, id), nil).StatusCode; c != 400 {
+			t.Errorf("%q: %d", id, c)
+		}
+	}
+}
+
+func TestMediaPathTraversalRejected(t *testing.T) {
+	f := setup(t)
+	for _, p := range []string{"/media/..%2F..%2Fsecret/thumb.jpg", "/covers/..%2Fkaraokedock.db"} {
+		resp, err := http.Get(f.srv.URL + p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 404 {
+			t.Errorf("%s: %d", p, resp.StatusCode)
+		}
+	}
+}
+
+func TestQueuePlaysFirstPlayableSong(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	for _, id := range []string{"aaaaaaaaaaa", "bbbbbbbbbbb"} {
+		if _, err := f.db.InsertSong(ctx, id, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ready := "playable"
+	if err := f.db.UpdateSong(ctx, "bbbbbbbbbbb", store.SongUpdate{State: &ready}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"aaaaaaaaaaa", "bbbbbbbbbbb"} {
+		if c := post(t, f, "/api/queue", fmt.Sprintf(`{"songId":%q,"singer":"Sam"}`, id), nil).StatusCode; c != 201 {
+			t.Fatal(c)
+		}
+	}
+	cur, err := f.db.CurrentItem(ctx)
+	if err != nil || cur == nil || cur.Song.ID != "bbbbbbbbbbb" {
+		t.Fatalf("%+v %v", cur, err)
+	}
+}
+
+func TestTheLogoIsServed(t *testing.T) {
+	f := setup(t)
+	for path, kind := range map[string]string{"/icon.svg": "image/svg+xml", "/icon/180": "image/png", "/icon/192": "image/png", "/icon/512": "image/png"} {
+		resp, err := http.Get(f.srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != kind {
+			t.Errorf("%s: %d %s", path, resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
+	}
+	if resp, err := http.Get(f.srv.URL + "/icon/64"); err != nil || resp.StatusCode != 404 {
+		t.Errorf("unknown size should be missing: %v", err)
+	}
+}
+
+func TestPagesAnswerNotModified(t *testing.T) {
+	f := setup(t)
+	resp, err := http.Get(f.srv.URL + "/tv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	tag := resp.Header.Get("ETag")
+	if resp.StatusCode != 200 || tag == "" {
+		t.Fatal(resp.StatusCode, tag)
+	}
+	req, _ := http.NewRequest("GET", f.srv.URL+"/tv", nil)
+	req.Header.Set("If-None-Match", tag)
+	again, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again.Body.Close()
+	if again.StatusCode != http.StatusNotModified {
+		t.Fatal(again.StatusCode)
+	}
+}
+
+func TestScriptOutlineMissingWithoutFont(t *testing.T) {
+	f := setup(t)
+	resp, err := http.Get(f.srv.URL + "/fonts/script-outline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Fatal(resp.StatusCode)
+	}
+}
+
+func TestPingAndClientCORSAndClientIDHeader(t *testing.T) {
+	f := setup(t)
+	req, _ := http.NewRequest("GET", f.srv.URL+"/api/ping", nil)
+	req.Header.Set("Origin", "http://localhost")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ping map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&ping)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || ping["app"] != "karaokedock" || resp.Header.Get("Access-Control-Allow-Origin") != "http://localhost" {
+		t.Fatalf("ping: %d %v cors=%q", resp.StatusCode, ping, resp.Header.Get("Access-Control-Allow-Origin"))
+	}
+
+	// Admin routes must never receive permissive CORS headers.
+	areq, _ := http.NewRequest("OPTIONS", f.srv.URL+"/api/admin/settings", nil)
+	areq.Header.Set("Origin", "http://localhost")
+	aresp, err := http.DefaultClient.Do(areq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aresp.Body.Close()
+	if aresp.Header.Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("admin leaked CORS header: %q", aresp.Header.Get("Access-Control-Allow-Origin"))
+	}
+
+	// Standalone clients identify themselves via X-Client-ID when cookies aren't shared.
+	const devID = "0123456789abcdef0123456789abcdef"
+	sreq, _ := http.NewRequest("GET", f.srv.URL+"/api/session", nil)
+	sreq.Header.Set("X-Room", f.room)
+	sreq.Header.Set("X-Client-ID", devID)
+	sresp, err := http.DefaultClient.Do(sreq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sess map[string]any
+	_ = json.NewDecoder(sresp.Body).Decode(&sess)
+	sresp.Body.Close()
+	if sresp.StatusCode != 200 || sess["clientTag"] != store.ClientTag(devID) {
+		t.Fatalf("session clientTag: %d %v (want %s)", sresp.StatusCode, sess, store.ClientTag(devID))
+	}
+}

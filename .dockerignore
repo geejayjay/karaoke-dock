@@ -1,0 +1,15 @@
+.git
+data
+bin
+docs
+scripts
+web/node_modules
+clients/*/node_modules
+clients/*/dist
+clients/*/android
+sidecar/.venv
+sidecar/.python
+sidecar/__pycache__
+*.apk
+*.keystore
+*.jks
